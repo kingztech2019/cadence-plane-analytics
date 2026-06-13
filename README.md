@@ -18,7 +18,7 @@
 
 ---
 
-![Cadence hero screenshot](docs/screenshots/hero.png)
+![Cadence — Cycle Time with Project Pulse strip](docs/screenshots/hero.png)
 
 </div>
 
@@ -74,52 +74,73 @@ It connects to any Plane workspace (cloud or self-hosted) via API key or OAuth, 
 
 ## Screenshots
 
+### Dashboard
+> Overview of all tracked projects with live sync status. Each card shows quick links to Delivery Speed, Bottlenecks, Work Flow, and Team Output for that project.
+
+![Dashboard](docs/screenshots/dashboard.png)
+
+---
+
 ### Project Pulse + Cycle Time
-> The Pulse strip surfaces your top signals on every page. Cycle Time shows scatter distribution with P50/P85 reference lines and a trend comparison vs the prior 30 days.
+> The Pulse strip surfaces your top signals on every page — bottleneck alerts, at-risk count, and trend changes. Cycle Time shows a scatter distribution with P50/P85 reference lines and a trend comparison vs the prior 30 days.
 
 ![Cycle Time page](docs/screenshots/cycle-time.png)
 
 ---
 
 ### Lead Time
-> How long from ticket created to ticket done — including all the waiting time, not just active development.
+> How long from ticket created to ticket done — including all the waiting time, not just active development. Shows P50, P85, and a per-issue breakdown table.
 
 ![Lead Time page](docs/screenshots/lead-time.png)
 
 ---
 
 ### Bottleneck Tracker
-> Identifies the stage where issues spend the most time. Tracks persistence across consecutive 30-day windows and escalates to "Critical" messaging when the same stage has been the bottleneck for 3+ periods.
+> Identifies the stage where issues spend the most time. Tracks persistence across consecutive 30-day windows and escalates to "Critical" messaging when the same stage has been the bottleneck for 3+ periods — with targeted action recommendations.
 
 ![Bottleneck page](docs/screenshots/bottleneck.png)
 
 ---
 
 ### WIP / Cumulative Flow Diagram
-> Watch work pile up (or flow smoothly) through each stage over time. A flat top band means your team is shipping consistently.
+> Watch work pile up (or flow smoothly) through each stage over time. A growing band in any one stage signals a bottleneck forming.
 
 ![CFD page](docs/screenshots/cfd.png)
 
 ---
 
 ### Team Health & Throughput
-> Per-person completion counts and speed badges. The Team Health Flags section surfaces overloaded members (high WIP), slow outliers (P85 > 1.5× team average), and high reactivation rates before they become a problem.
+> Per-person completion counts and typical cycle time. The Team Health Flags section surfaces overloaded members (high WIP), slow outliers (P85 > 1.5× team average), and high reactivation rates before they become a problem.
 
 ![Throughput page](docs/screenshots/throughput.png)
 
 ---
 
-### Sprint Comparison + AI Retrospective
-> Sprint-over-sprint velocity chart. The AI Retrospective button generates a narrative summary comparing the selected sprint to the previous one, powered by OpenRouter.
+### Team Contributions
+> Workspace-level view of each member's output across all projects — total issues completed, P50/P85 speed, and which projects they're contributing to.
+
+![Team contributions](docs/screenshots/team.png)
+
+---
+
+### Sprint Comparison
+> Sprint-over-sprint velocity chart comparing completed issues, P50/P85 cycle time, and scope added per sprint. The AI Retrospective button generates a narrative summary powered by OpenRouter.
 
 ![Sprints page](docs/screenshots/sprints.png)
 
 ---
 
 ### Flow Efficiency
-> Ratio of active working time to total lead time, benchmarked against the industry median of ~15%. Most teams are surprised how much time issues spend waiting vs being worked on.
+> Ratio of active working time to total lead time, benchmarked against the industry median of ~15%. Includes a distribution histogram and a per-issue breakdown sorted by efficiency.
 
 ![Flow Efficiency page](docs/screenshots/flow-efficiency.png)
+
+---
+
+### Scope Creep
+> How much work gets added mid-sprint vs committed at the start. Sprints above the 30% danger threshold are highlighted — a leading indicator of missed goals.
+
+![Scope Creep page](docs/screenshots/scope-creep.png)
 
 ---
 
@@ -134,20 +155,6 @@ It connects to any Plane workspace (cloud or self-hosted) via API key or OAuth, 
 > Probabilistic delivery estimation using 10,000 simulations over your team's real weekly throughput. Returns P50, P85, and P95 completion dates for a given backlog size.
 
 ![Forecast page](docs/screenshots/forecast.png)
-
----
-
-### Flow Health Score
-> A weighted composite score (A–F grade) built from four signals: cycle time trend, WIP balance, reactivation rate, and throughput trend. Visible as a badge on every project page.
-
-![Flow Health widget](docs/screenshots/flow-health.png)
-
----
-
-### Shareable Dashboards
-> Generate a read-only link to any project's analytics. Recipients can view all charts without logging in.
-
-![Share link widget](docs/screenshots/share.png)
 
 ---
 
