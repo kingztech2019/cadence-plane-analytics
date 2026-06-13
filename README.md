@@ -6,7 +6,7 @@
 
 **Delivery analytics for [Plane](https://plane.so) — understand how your team actually ships software**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Next.js](https://img.shields.io/badge/Next.js-15-black?logo=next.js)](https://nextjs.org/)
 [![Fastify](https://img.shields.io/badge/Fastify-5.x-000000?logo=fastify)](https://fastify.dev/)
@@ -421,10 +421,10 @@ To report a security vulnerability, please email **security@kingztech2019** rath
 
 ## License
 
-Cadence is released under the [MIT License](LICENSE).
+Cadence is released under the [GNU AGPL-3.0 License](LICENSE).
 
 ```
-MIT License — Copyright (c) 2025 Cadence Contributors
+AGPL-3.0 — Copyright (c) 2025 Cadence Contributors
 ```
 
 You are free to use, modify, and distribute this software for any purpose. See [LICENSE](LICENSE) for the full text.

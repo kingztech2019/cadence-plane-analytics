@@ -275,7 +275,7 @@ export default function LandingPage() {
                 width: 6, height: 6, borderRadius: '50%',
                 background: 'var(--accent-light)', boxShadow: '0 0 6px var(--accent-light)',
               }} />
-              Open source · MIT License · Built for Plane
+              Open source · AGPL-3.0 · Built for Plane
             </span>
           </div>
 
@@ -335,7 +335,7 @@ export default function LandingPage() {
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             gap: 20, flexWrap: 'wrap', marginBottom: 56,
           }}>
-            {['No write access to Plane', 'Self-hostable in one command', 'Works with Plane Cloud and self-hosted', 'MIT licensed'].map((t) => (
+            {['No write access to Plane', 'Self-hostable in one command', 'Works with Plane Cloud and self-hosted', 'AGPL-3.0 licensed'].map((t) => (
               <span key={t} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--fg-subtle)' }}>
                 <CheckCircle2 size={13} color="var(--success)" strokeWidth={2.5} />
                 {t}
@@ -570,16 +570,16 @@ export default function LandingPage() {
                 OPEN SOURCE
               </p>
               <h2 style={{ fontSize: 'clamp(24px, 3.5vw, 36px)', fontWeight: 800, letterSpacing: '-0.025em', marginBottom: 16 }}>
-                MIT licensed. Self-host it, fork it, contribute to it.
+                AGPL-3.0 licensed. Self-host it, fork it, contribute to it.
               </h2>
               <p style={{ fontSize: 15, lineHeight: 1.7, color: 'var(--fg-muted)', marginBottom: 28 }}>
-                Cadence is fully open source under the MIT license. The entire codebase is
-                available on GitHub. Run it on your own infrastructure, contribute a new metric,
-                or integrate it with your internal tooling. No hidden enterprise tier.
+                Cadence is fully open source under the AGPL-3.0 license. Anyone who runs a modified
+                version as a service must also publish their changes. Self-host it, fork it,
+                or contribute — no hidden enterprise tier.
               </p>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 28 }}>
                 {[
-                  { icon: Shield,    text: 'MIT license: use it in any project, commercial or otherwise' },
+                  { icon: Shield,    text: 'AGPL-3.0: modifications must stay open source if run as a service' },
                   { icon: GitBranch, text: 'Full source on GitHub including migrations, workers, and API' },
                   { icon: RefreshCw, text: 'Accepts pull requests for new metrics, bug fixes, and integrations' },
                 ].map((item) => {
@@ -730,7 +730,7 @@ export default function LandingPage() {
               </a>
             ))}
           </div>
-          <p style={{ fontSize: 12, color: 'var(--fg-subtle)' }}>MIT License. Copyright 2025 Cadence Contributors.</p>
+          <p style={{ fontSize: 12, color: 'var(--fg-subtle)' }}>AGPL-3.0. Copyright 2025 Cadence Contributors.</p>
         </div>
       </footer>
 
