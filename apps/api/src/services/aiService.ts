@@ -2,6 +2,22 @@ import { env } from '../config/env.js';
 
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 
+async function fetchWithRetry(url: string, options: RequestInit, retries = 3): Promise<Response> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      return await fetch(url, options);
+    } catch (err) {
+      lastErr = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      // Only retry on transient network errors (DNS, connection reset)
+      if (!msg.includes('EAI_AGAIN') && !msg.includes('ECONNRESET') && !msg.includes('ETIMEDOUT')) throw err;
+      if (attempt < retries - 1) await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 interface SprintRetroInput {
   cycleName: string;
   startDate: string;
@@ -50,13 +66,157 @@ Write a 150–200 word sprint retrospective in plain English. Be specific with n
   return prompt;
 }
 
+const FLOW_LABEL: Record<string, string> = {
+  done:        'shipped to production',
+  review:      'in staging / QA review',
+  in_progress: 'in active development',
+  todo:        'queued / ready to start',
+};
+
+interface MonthlyActivitiesInput {
+  projectName: string;
+  monthLabel: string; // e.g. 'May 2026'
+  stateGroups: Array<{
+    state_name: string;
+    flow_category: string;
+    items: Array<{ title: string; priority: string }>;
+  }>;
+}
+
+function buildMonthlyActivitiesPrompt(data: MonthlyActivitiesInput): string {
+  const groupLines = data.stateGroups.map((g) => {
+    const label = FLOW_LABEL[g.flow_category] ?? g.flow_category;
+    const items = g.items.map((i) => `    - ${i.title}`).join('\n');
+    return `${g.state_name} — ${label} (${g.items.length} items):\n${items}`;
+  }).join('\n\n');
+
+  const totalItems = data.stateGroups.reduce((s, g) => s + g.items.length, 0);
+
+  return `You are a CTO writing a brief activities summary for a monthly performance review. Audience is senior management — no technical jargon, focus on outcomes and delivery status.
+
+Project: ${data.projectName}
+Month: ${data.monthLabel}
+Total items tracked: ${totalItems}
+
+Work items grouped by status:
+
+${groupLines || '(no items recorded)'}
+
+Write 3–5 concise bullet points summarising what the team accomplished in ${data.monthLabel}. Where relevant, mention which items are in production vs staging vs in progress — this context matters to management. Group related items into themes. Each bullet: one sentence, action verb, clear outcome.
+
+Format: bullet points starting with "•", no headers, no preamble.`;
+}
+
+interface MonthlyProjectionsInput {
+  projectName: string;
+  monthLabel: string;      // current month, e.g. 'June 2026'
+  nextMonthLabel: string;  // projection target, e.g. 'July 2026'
+  stateGroups: Array<{
+    state_name: string;
+    flow_category: string;
+    items: Array<{ title: string; priority: string }>;
+  }>;
+}
+
+function buildMonthlyProjectionsPrompt(data: MonthlyProjectionsInput): string {
+  const groupLines = data.stateGroups.map((g) => {
+    const label = FLOW_LABEL[g.flow_category] ?? g.flow_category;
+    const items = g.items.map((i) => `    - ${i.title}`).join('\n');
+    return `${g.state_name} — ${label} (${g.items.length} items):\n${items}`;
+  }).join('\n\n');
+
+  const totalItems = data.stateGroups.reduce((s, g) => s + g.items.length, 0);
+
+  return `You are a CTO writing the "Projected activities for ${data.nextMonthLabel}" section of a monthly performance review. Audience is senior management.
+
+Project: ${data.projectName}
+Current month: ${data.monthLabel}
+Items currently in active development (${totalItems} total):
+
+${groupLines || '(no active items)'}
+
+Based on what is currently in progress, write 3–5 concise forward-looking bullet points projecting what the team expects to accomplish in ${data.nextMonthLabel}. Use future tense ("The team will...", "Planned completion of...", "Focus will be on..."). Be specific about outcomes, not just activities. Prioritise items in staging/review as they are closest to completion.
+
+Format: bullet points starting with "•", no headers, no preamble.`;
+}
+
 export const aiService = {
+  async generateMonthlyProjections(input: MonthlyProjectionsInput): Promise<string> {
+    if (!env.OPENROUTER_API_KEY) {
+      throw new Error('OpenRouter API key not configured. Set OPENROUTER_API_KEY in the API environment.');
+    }
+
+    const response = await fetchWithRetry(`${OPENROUTER_BASE}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': env.FRONTEND_URL,
+        'X-Title': 'Cadence Monthly Report',
+      },
+      body: JSON.stringify({
+        model: 'anthropic/claude-3.5-haiku',
+        messages: [{ role: 'user', content: buildMonthlyProjectionsPrompt(input) }],
+        max_tokens: 500,
+        temperature: 0.6,
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text().catch(() => '');
+      throw new Error(`OpenRouter error ${response.status}: ${errText}`);
+    }
+
+    const data = (await response.json()) as {
+      choices: Array<{ message: { content: string } }>;
+    };
+
+    const content = data.choices[0]?.message.content;
+    if (!content) throw new Error('Empty response from OpenRouter');
+    return content.trim();
+  },
+
+  async generateMonthlyActivities(input: MonthlyActivitiesInput): Promise<string> {
+    if (!env.OPENROUTER_API_KEY) {
+      throw new Error('OpenRouter API key not configured. Set OPENROUTER_API_KEY in the API environment.');
+    }
+
+    const response = await fetchWithRetry(`${OPENROUTER_BASE}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': env.FRONTEND_URL,
+        'X-Title': 'Cadence Monthly Report',
+      },
+      body: JSON.stringify({
+        model: 'anthropic/claude-3.5-haiku',
+        messages: [{ role: 'user', content: buildMonthlyActivitiesPrompt(input) }],
+        max_tokens: 500,
+        temperature: 0.6,
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text().catch(() => '');
+      throw new Error(`OpenRouter error ${response.status}: ${errText}`);
+    }
+
+    const data = (await response.json()) as {
+      choices: Array<{ message: { content: string } }>;
+    };
+
+    const content = data.choices[0]?.message.content;
+    if (!content) throw new Error('Empty response from OpenRouter');
+    return content.trim();
+  },
+
   async generateSprintRetro(input: SprintRetroInput): Promise<string> {
     if (!env.OPENROUTER_API_KEY) {
       throw new Error('OpenRouter API key not configured. Set OPENROUTER_API_KEY in the API environment.');
     }
 
-    const response = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+    const response = await fetchWithRetry(`${OPENROUTER_BASE}/chat/completions`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,

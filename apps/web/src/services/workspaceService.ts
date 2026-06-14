@@ -29,4 +29,76 @@ export const workspaceService = {
       `/workspaces/${connectionId}/projects`
     );
   },
+
+  async getMonthlyReport(connectionId: string, month: string) {
+    return apiRequest<{
+      month: string;
+      projects: Array<{
+        id: string;
+        name: string;
+        identifier: string;
+        totalItems: number;
+        itemsByState: Array<{
+          state_name: string;
+          state_color: string | null;
+          flow_category: string;
+          sequence_order: number;
+          items: Array<{ sequence_id: number; title: string; priority: string }>;
+        }>;
+        entry: { goal_text: string; activities_text: string; projections_text: string } | null;
+      }>;
+    }>(`/workspaces/${connectionId}/monthly-report?month=${month}`);
+  },
+
+  async saveMonthlyEntry(
+    connectionId: string,
+    projectId: string,
+    month: string,
+    data: { goal_text: string; activities_text: string; projections_text: string },
+  ) {
+    return apiRequest<{ ok: boolean }>(
+      `/workspaces/${connectionId}/monthly-report/${projectId}?month=${month}`,
+      { method: 'PUT', body: JSON.stringify(data) },
+    );
+  },
+
+  async aiDraftActivities(connectionId: string, projectId: string, month: string) {
+    return apiRequest<{ draft: string }>(
+      `/workspaces/${connectionId}/monthly-report/${projectId}/ai-draft?month=${month}&type=activities`,
+      { method: 'POST', body: '{}' },
+    );
+  },
+
+  async aiDraftProjections(connectionId: string, projectId: string, month: string) {
+    return apiRequest<{ draft: string }>(
+      `/workspaces/${connectionId}/monthly-report/${projectId}/ai-draft?month=${month}&type=projections`,
+      { method: 'POST', body: '{}' },
+    );
+  },
+
+  async getReport(
+    connectionId: string,
+    from: string,
+    to: string,
+    projectId?: string,
+  ) {
+    const params = new URLSearchParams({ from, to });
+    if (projectId) params.set('projectId', projectId);
+    return apiRequest<Array<{
+      sequence_id: number;
+      title: string;
+      priority: string;
+      created_at_plane: string;
+      updated_at_plane: string;
+      state_name: string;
+      state_order: number;
+      state_color: string | null;
+      flow_category: string;
+      days_in_current_state: number;
+      assignee_name: string | null;
+      project_identifier: string;
+      project_id: string;
+      project_name: string;
+    }>>(`/workspaces/${connectionId}/report?${params.toString()}`);
+  },
 };

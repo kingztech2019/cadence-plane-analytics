@@ -10,6 +10,8 @@ import {
   Plug,
   GitBranch,
   HelpCircle,
+  ClipboardList,
+  FileBarChart2,
 } from 'lucide-react';
 import { authService } from '@/services/authService';
 import { CadenceMark } from '@/components/shared/CadenceLogo';
@@ -224,6 +226,18 @@ export function Sidebar() {
           icon={Users}
           label="Team"
           active={pathname === '/contributors'}
+        />
+        <NavLink
+          href="/report"
+          icon={ClipboardList}
+          label="Status Report"
+          active={pathname === '/report'}
+        />
+        <NavLink
+          href="/monthly-report"
+          icon={FileBarChart2}
+          label="Monthly Report"
+          active={pathname === '/monthly-report'}
         />
 
         {/* ── PROJECTS ── */}
