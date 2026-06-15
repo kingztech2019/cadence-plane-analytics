@@ -106,10 +106,13 @@ async function processBackfillItem(data: {
 }): Promise<void> {
   const { connectionId, internalProjectId, planeProjectId, workspaceSlug, item } = data;
 
-  // Skip activity fetch if item was never updated (no transitions)
+  // Always upsert the work item itself so it appears in the DB
+  const internalId = await syncService.upsertWorkItem(item, internalProjectId, connectionId);
+
+  // Only fetch activity history if the item has been modified after creation
+  // (items with created_at === updated_at have no state transitions to record)
   if (item.created_at === item.updated_at) return;
 
-  const internalId = await syncService.upsertWorkItem(item, internalProjectId, connectionId);
   const { client } = await syncService.getClient(connectionId);
   await syncService.upsertTransitions(internalId, workspaceSlug, planeProjectId, item.id, client);
 

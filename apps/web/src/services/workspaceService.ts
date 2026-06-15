@@ -133,4 +133,17 @@ export const workspaceService = {
       project_name: string;
     }>>(`/workspaces/${connectionId}/report?${params.toString()}`);
   },
+
+  async getReportSummaries(connectionId: string, from: string, to: string) {
+    return apiRequest<Record<string, { summary_text: string; generated_at: string }>>(
+      `/workspaces/${connectionId}/report-summaries?from=${from}&to=${to}`
+    );
+  },
+
+  async generateReportSummary(connectionId: string, projectId: string, from: string, to: string) {
+    return apiRequest<{ summary_text: string; generated_at: string }>(
+      `/workspaces/${connectionId}/report-summaries/${projectId}?from=${from}&to=${to}`,
+      { method: 'POST', body: '{}' }
+    );
+  },
 };

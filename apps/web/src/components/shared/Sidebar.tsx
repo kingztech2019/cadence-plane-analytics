@@ -367,7 +367,7 @@ export function Sidebar() {
         {/* Help */}
         <div style={{ padding: '6px 8px 4px' }}>
           <Link
-            href="/dashboard"
+            href="/docs"
             style={{
               display: 'flex', alignItems: 'center', gap: 9,
               padding: '7px 10px', borderRadius: 9,

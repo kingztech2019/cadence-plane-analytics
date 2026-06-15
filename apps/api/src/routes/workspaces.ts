@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { pool } from '../config/db.js';
 import { syncService } from '../services/syncService.js';
-import { aiService } from '../services/aiService.js';
+import { aiService, type WeeklyProjectSummaryInput } from '../services/aiService.js';
 
 const workspacesRoutes: FastifyPluginAsync = async (fastify) => {
   // GET /api/workspaces — list connected workspaces for current user
@@ -110,6 +110,27 @@ const workspacesRoutes: FastifyPluginAsync = async (fastify) => {
     }
   );
 
+  // POST /api/workspaces/:connectionId/resync — re-trigger full backfill
+  fastify.post<{ Params: { connectionId: string } }>(
+    '/:connectionId/resync',
+    { preHandler: [fastify.authenticate] },
+    async (request, reply) => {
+      const userId = (request.user as { id: string }).id;
+      const { connectionId } = request.params;
+
+      const check = await pool.query(
+        `SELECT id FROM workspace_connections WHERE id = $1 AND owner_user_id = $2`,
+        [connectionId, userId]
+      );
+      if (!check.rows[0]) {
+        return reply.status(404).send({ error: 'Connection not found' });
+      }
+
+      await syncService.kickoffBackfill(connectionId);
+      return reply.send({ ok: true, message: 'Backfill re-queued' });
+    }
+  );
+
   // GET /api/workspaces/:connectionId/projects
   fastify.get<{ Params: { connectionId: string } }>(
     '/:connectionId/projects',
@@ -209,6 +230,175 @@ const workspacesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.send({ data: result.rows });
     }
   );
+  // ── WEEKLY REPORT SUMMARIES ───────────────────────────────────────────────
+
+  // GET /api/workspaces/:connectionId/report-summaries?from=&to=
+  // Returns all saved AI summaries for the given date range
+  fastify.get<{
+    Params: { connectionId: string };
+    Querystring: { from: string; to: string };
+  }>(
+    '/:connectionId/report-summaries',
+    { preHandler: [fastify.authenticate] },
+    async (request, reply) => {
+      const userId = (request.user as { id: string }).id;
+      const { connectionId } = request.params;
+      const { from, to } = request.query;
+
+      const conn = await pool.query(
+        'SELECT id FROM workspace_connections WHERE id = $1 AND owner_user_id = $2',
+        [connectionId, userId]
+      );
+      if (!conn.rows[0]) return reply.status(404).send({ error: 'Not found' });
+
+      const result = await pool.query(
+        `SELECT wrs.plane_project_id, pp.name AS project_name,
+                wrs.summary_text, wrs.generated_at
+         FROM weekly_report_summaries wrs
+         JOIN plane_projects pp ON pp.id = wrs.plane_project_id
+         WHERE wrs.workspace_connection_id = $1
+           AND wrs.date_from = $2
+           AND wrs.date_to   = $3`,
+        [connectionId, from, to]
+      );
+
+      // Keyed by project id for easy lookup
+      const byProject: Record<string, { summary_text: string; generated_at: string }> = {};
+      for (const row of result.rows) {
+        byProject[row.plane_project_id] = {
+          summary_text: row.summary_text,
+          generated_at: row.generated_at,
+        };
+      }
+      return reply.send({ data: byProject });
+    }
+  );
+
+  // POST /api/workspaces/:connectionId/report-summaries/:projectId?from=&to=
+  // Generate (or regenerate) and save an AI summary for one project
+  fastify.post<{
+    Params: { connectionId: string; projectId: string };
+    Querystring: { from: string; to: string };
+  }>(
+    '/:connectionId/report-summaries/:projectId',
+    { preHandler: [fastify.authenticate] },
+    async (request, reply) => {
+      const userId = (request.user as { id: string }).id;
+      const { connectionId, projectId } = request.params;
+      const { from, to } = request.query;
+
+      const conn = await pool.query(
+        'SELECT id FROM workspace_connections WHERE id = $1 AND owner_user_id = $2',
+        [connectionId, userId]
+      );
+      if (!conn.rows[0]) return reply.status(404).send({ error: 'Not found' });
+
+      const fromDate = from ?? new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10);
+      const toDate   = to   ?? new Date().toISOString().slice(0, 10);
+
+      // Fetch all work items active in this date range for this project
+      const itemsResult = await pool.query(
+        `SELECT
+           wi.title,
+           wi.priority,
+           ps.flow_category,
+           ps.name AS state_name,
+           wm.display_name AS assignee_name,
+           wi.completed_at_plane,
+           COALESCE(
+             ROUND(EXTRACT(EPOCH FROM (NOW() - tis_cur.entered_at)) / 86400)::int,
+             ROUND(EXTRACT(EPOCH FROM (NOW() - wi.updated_at_plane)) / 86400)::int
+           ) AS days_in_state
+         FROM work_items wi
+         JOIN plane_states ps      ON wi.plane_state_id  = ps.id
+         JOIN plane_projects pp    ON wi.plane_project_id = pp.id
+         LEFT JOIN workspace_members wm ON wi.assignee_id = wm.id
+         LEFT JOIN LATERAL (
+           SELECT entered_at FROM time_in_state
+           WHERE work_item_id = wi.id AND state_id = wi.plane_state_id AND exited_at IS NULL
+           ORDER BY entered_at DESC LIMIT 1
+         ) tis_cur ON true
+         WHERE pp.workspace_connection_id = $1
+           AND pp.id = $2
+           AND wi.updated_at_plane >= $3::date
+           AND wi.updated_at_plane <  ($4::date + INTERVAL '1 day')`,
+        [connectionId, projectId, fromDate, toDate]
+      );
+
+      const projectRow = await pool.query(
+        'SELECT name FROM plane_projects WHERE id = $1',
+        [projectId]
+      );
+      if (!projectRow.rows[0]) return reply.status(404).send({ error: 'Project not found' });
+
+      const items = itemsResult.rows as Array<{
+        title: string;
+        priority: string;
+        flow_category: string;
+        state_name: string;
+        assignee_name: string | null;
+        completed_at_plane: string | null;
+        days_in_state: number;
+      }>;
+
+      // Build aggregated inputs for the AI
+      const STALE_THRESHOLD: Record<string, number> = { in_progress: 7, review: 7, todo: 14 };
+      const completedItems = items.filter(i => i.flow_category === 'done' || i.completed_at_plane);
+      const inProgressItems = items.filter(i => i.flow_category === 'in_progress');
+      const reviewItems = items.filter(i => i.flow_category === 'review');
+      const staleItems = items.filter(i => {
+        const thresh = STALE_THRESHOLD[i.flow_category];
+        return thresh !== undefined && i.days_in_state >= thresh;
+      });
+      const highPriorityItems = items.filter(i => ['urgent','highest','high'].includes(i.priority));
+
+      // Per-assignee stats
+      const assigneeMap: Record<string, { name: string; completed: number; inProgress: number; stale: number; totalActive: number }> = {};
+      for (const item of items) {
+        const name = item.assignee_name ?? 'Unassigned';
+        if (!assigneeMap[name]) assigneeMap[name] = { name, completed: 0, inProgress: 0, stale: 0, totalActive: 0 };
+        const row = assigneeMap[name]!;
+        row.totalActive++;
+        if (item.flow_category === 'done' || item.completed_at_plane) row.completed++;
+        if (item.flow_category === 'in_progress') row.inProgress++;
+        const staleThresh = STALE_THRESHOLD[item.flow_category];
+        if (staleThresh !== undefined && item.days_in_state >= staleThresh) row.stale++;
+      }
+
+      const summaryInput: WeeklyProjectSummaryInput = {
+        projectName: projectRow.rows[0].name,
+        dateFrom: fromDate,
+        dateTo: toDate,
+        totalItems: items.length,
+        completedItems: completedItems.length,
+        inProgressItems: inProgressItems.length,
+        reviewItems: reviewItems.length,
+        staleItems: staleItems.length,
+        highPriorityItems: highPriorityItems.length,
+        assigneeStats: Object.values(assigneeMap),
+        completedTitles: completedItems.map(i => i.title),
+        staleTitles: staleItems.map(i => `${i.title} (${i.days_in_state}d in ${i.state_name})`),
+        blockedTitles: items
+          .filter(i => i.priority === 'urgent' && i.flow_category !== 'done')
+          .map(i => i.title),
+      };
+
+      const summaryText = await aiService.generateWeeklyProjectSummary(summaryInput);
+
+      // Upsert — regeneration replaces the previous summary for the same period
+      await pool.query(
+        `INSERT INTO weekly_report_summaries
+           (workspace_connection_id, plane_project_id, date_from, date_to, summary_text, generated_at)
+         VALUES ($1, $2, $3, $4, $5, NOW())
+         ON CONFLICT (workspace_connection_id, plane_project_id, date_from, date_to)
+         DO UPDATE SET summary_text = EXCLUDED.summary_text, generated_at = NOW()`,
+        [connectionId, projectId, fromDate, toDate, summaryText]
+      );
+
+      return reply.send({ data: { summary_text: summaryText, generated_at: new Date().toISOString() } });
+    }
+  );
+
   // ── VELOCITY ─────────────────────────────────────────────────────────────
 
   // GET /api/workspaces/:connectionId/velocity

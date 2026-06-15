@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, CSSProperties } from 'react';
-import { FileText, Filter, Printer, AlertTriangle } from 'lucide-react';
+import { FileText, Filter, Printer, AlertTriangle, Sparkles, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react';
 import { workspaceService } from '@/services/workspaceService';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -142,6 +142,13 @@ export default function ReportPage() {
   const [error,   setError]   = useState('');
   const [loaded,  setLoaded]  = useState(false);
 
+  // Per-project AI summaries: { [projectId]: { summary_text, generated_at } }
+  type SummaryEntry = { summary_text: string; generated_at: string };
+  const [summaries,        setSummaries]        = useState<Record<string, SummaryEntry>>({});
+  const [generatingFor,    setGeneratingFor]    = useState<string | null>(null);
+  const [summaryError,     setSummaryError]     = useState<Record<string, string>>({});
+  const [expandedSummary,  setExpandedSummary]  = useState<Record<string, boolean>>({});
+
   useEffect(() => {
     workspaceService.listConnections().then((conns) => {
       const conn = conns[0];
@@ -165,16 +172,34 @@ export default function ReportPage() {
     setError('');
     try {
       const prev = getPrevPeriod(f, t);
-      const [current, previous] = await Promise.all([
+      const [current, previous, savedSummaries] = await Promise.all([
         workspaceService.getReport(cid, f, t, pid || undefined),
         workspaceService.getReport(cid, prev.from, prev.to, pid || undefined),
+        workspaceService.getReportSummaries(cid, f, t),
       ]);
       setItems(current);
       setPrevItems(previous);
+      setSummaries(savedSummaries ?? {});
     } catch {
       setError('Failed to load report. Check your connection and try again.');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function generateSummary(projectId: string) {
+    if (!connectionId || generatingFor) return;
+    setGeneratingFor(projectId);
+    setSummaryError(prev => ({ ...prev, [projectId]: '' }));
+    try {
+      const result = await workspaceService.generateReportSummary(connectionId, projectId, from, to);
+      setSummaries(prev => ({ ...prev, [projectId]: result }));
+      setExpandedSummary(prev => ({ ...prev, [projectId]: true }));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to generate summary';
+      setSummaryError(prev => ({ ...prev, [projectId]: msg }));
+    } finally {
+      setGeneratingFor(null);
     }
   }
 
@@ -194,8 +219,29 @@ export default function ReportPage() {
     return acc;
   }, {});
 
-  // ── Group items by state ────────────────────────────────────────────────────
+  // ── Group items by project, then by state ──────────────────────────────────
 
+  const projectGroups: Record<string, {
+    projectId: string; projectName: string;
+    states: Record<string, { color: string; order: number; items: ReportItem[] }>;
+  }> = {};
+
+  for (const item of items) {
+    if (!projectGroups[item.project_id]) {
+      projectGroups[item.project_id] = { projectId: item.project_id, projectName: item.project_name, states: {} };
+    }
+    const pg = projectGroups[item.project_id]!;
+    if (!pg.states[item.state_name]) {
+      pg.states[item.state_name] = { color: item.state_color ?? '#6366f1', order: item.state_order, items: [] };
+    }
+    pg.states[item.state_name]!.items.push(item);
+  }
+
+  const sortedProjectGroups = Object.values(projectGroups).sort((a, b) =>
+    a.projectName.localeCompare(b.projectName)
+  );
+
+  // Flat state groups (for backward-compat display when one project selected)
   const groups: Record<string, { color: string; order: number; items: ReportItem[] }> = {};
   for (const item of items) {
     const g = groups[item.state_name];
@@ -286,6 +332,9 @@ export default function ReportPage() {
           thead                { display: table-header-group; }
         }
         .print-header { display: none; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .ai-summary-block { display: block; }
+        @media print { .ai-summary-block { break-inside: avoid; } }
       `}</style>
 
       <div className="report-page" style={{ padding: '28px 32px', maxWidth: 1200, margin: '0 auto' }}>
@@ -416,6 +465,157 @@ export default function ReportPage() {
               value={urgentNow + highNow}
               sub={urgentNow > 0 ? `${urgentNow} Urgent/Highest · ${highNow} High` : `${highNow} High`}
             />
+          </div>
+        )}
+
+        {/* ── Per-project AI Summaries ─────────────────────────────────────── */}
+        {!loading && items.length > 0 && (
+          <div style={{ marginBottom: 32 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                <Sparkles size={14} style={{ color: 'var(--accent)' }} />
+                <span style={{
+                  fontSize: 13, fontWeight: 700, color: 'var(--fg)',
+                }}>
+                  AI Project Summaries
+                </span>
+              </div>
+              <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+              <span style={{ fontSize: 11, color: 'var(--fg-subtle)' }}>
+                Saved once — click Generate to create or Regenerate to refresh
+              </span>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {sortedProjectGroups.map(({ projectId, projectName }) => {
+                const saved = summaries[projectId];
+                const isGenerating = generatingFor === projectId;
+                const errMsg = summaryError[projectId];
+                const isExpanded = expandedSummary[projectId] ?? !!saved;
+
+                return (
+                  <div
+                    key={projectId}
+                    className="ai-summary-block"
+                    style={{
+                      background: 'var(--surface)',
+                      border: saved ? '1px solid rgba(99,102,241,0.3)' : '1px solid var(--border)',
+                      borderRadius: 14,
+                      overflow: 'hidden',
+                    }}
+                  >
+                    {/* Project header */}
+                    <div style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      padding: '12px 18px',
+                      borderBottom: isExpanded && (saved || isGenerating || errMsg) ? '1px solid var(--border)' : 'none',
+                      background: saved ? 'rgba(99,102,241,0.06)' : 'var(--surface-2)',
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <div style={{
+                          width: 28, height: 28, borderRadius: 8,
+                          background: 'var(--accent-dim, rgba(99,102,241,0.12))',
+                          border: '1px solid var(--accent-glow, rgba(99,102,241,0.25))',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontSize: 11, fontWeight: 800, color: 'var(--accent)', flexShrink: 0,
+                        }}>
+                          {projectName[0]?.toUpperCase()}
+                        </div>
+                        <div>
+                          <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--fg)', margin: 0 }}>
+                            {projectName}
+                          </p>
+                          {saved && (
+                            <p style={{ fontSize: 10, color: 'var(--fg-subtle)', margin: '1px 0 0' }}>
+                              Last generated {new Date(saved.generated_at).toLocaleDateString('en-GB', {
+                                day: 'numeric', month: 'short', year: 'numeric',
+                                hour: '2-digit', minute: '2-digit',
+                              })}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        {saved && (
+                          <button
+                            onClick={() => setExpandedSummary(prev => ({ ...prev, [projectId]: !isExpanded }))}
+                            style={{
+                              display: 'flex', alignItems: 'center', gap: 5,
+                              padding: '5px 10px', borderRadius: 7,
+                              background: 'transparent', border: '1px solid var(--border)',
+                              color: 'var(--fg-subtle)', fontSize: 12, cursor: 'pointer',
+                            }}
+                          >
+                            {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                            {isExpanded ? 'Collapse' : 'Expand'}
+                          </button>
+                        )}
+                        <button
+                          onClick={() => generateSummary(projectId)}
+                          disabled={!!generatingFor}
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: 7,
+                            padding: '7px 14px', borderRadius: 8,
+                            background: saved ? 'var(--surface-2)' : 'var(--accent)',
+                            color: saved ? 'var(--fg-muted)' : '#fff',
+                            border: saved ? '1px solid var(--border)' : 'none',
+                            fontSize: 12, fontWeight: 600,
+                            cursor: generatingFor ? 'not-allowed' : 'pointer',
+                            opacity: generatingFor && !isGenerating ? 0.5 : 1,
+                            transition: 'all 120ms ease',
+                          }}
+                        >
+                          {isGenerating
+                            ? <><RefreshCw size={13} style={{ animation: 'spin 1s linear infinite' }} /> Generating…</>
+                            : <><Sparkles size={13} /> {saved ? 'Regenerate' : 'Generate Summary'}</>
+                          }
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Summary body */}
+                    {isGenerating && (
+                      <div style={{ padding: '18px 22px', display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <div style={{
+                          width: 16, height: 16, borderRadius: '50%', flexShrink: 0,
+                          border: '2px solid var(--accent)', borderTopColor: 'transparent',
+                          animation: 'spin 0.8s linear infinite',
+                        }} />
+                        <p style={{ fontSize: 13, color: 'var(--fg-subtle)', margin: 0 }}>
+                          Analysing {projectName} — reading completed items, assignee contributions, stale work…
+                        </p>
+                      </div>
+                    )}
+
+                    {errMsg && !isGenerating && (
+                      <div style={{ padding: '12px 18px', background: 'rgba(239,68,68,0.06)', borderTop: '1px solid rgba(239,68,68,0.2)' }}>
+                        <p style={{ fontSize: 12, color: '#ef4444', margin: 0 }}>⚠ {errMsg}</p>
+                      </div>
+                    )}
+
+                    {saved && isExpanded && !isGenerating && (
+                      <div style={{ padding: '18px 22px' }}>
+                        <p style={{
+                          fontSize: 13.5, color: 'var(--fg-muted)', lineHeight: 1.85,
+                          margin: 0, whiteSpace: 'pre-wrap',
+                        }}>
+                          {saved.summary_text}
+                        </p>
+                      </div>
+                    )}
+
+                    {!saved && !isGenerating && !errMsg && (
+                      <div style={{ padding: '14px 18px' }}>
+                        <p style={{ fontSize: 12, color: 'var(--fg-subtle)', margin: 0, fontStyle: 'italic' }}>
+                          No summary yet for this period. Click "Generate Summary" to create a CTO-ready briefing from this project's activity data.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 
