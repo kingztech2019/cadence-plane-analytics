@@ -12,6 +12,8 @@ import {
   HelpCircle,
   ClipboardList,
   FileBarChart2,
+  Archive,
+  BarChart3,
 } from 'lucide-react';
 import { authService } from '@/services/authService';
 import { CadenceMark } from '@/components/shared/CadenceLogo';
@@ -238,6 +240,18 @@ export function Sidebar() {
           icon={FileBarChart2}
           label="Monthly Report"
           active={pathname === '/monthly-report'}
+        />
+        <NavLink
+          href="/quarterly-report"
+          icon={BarChart3}
+          label="Quarterly Report"
+          active={pathname === '/quarterly-report'}
+        />
+        <NavLink
+          href="/report-archive"
+          icon={Archive}
+          label="Report Archive"
+          active={pathname === '/report-archive'}
         />
 
         {/* ── PROJECTS ── */}

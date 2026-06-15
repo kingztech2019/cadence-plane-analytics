@@ -209,6 +209,217 @@ const workspacesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.send({ data: result.rows });
     }
   );
+  // ── VELOCITY ─────────────────────────────────────────────────────────────
+
+  // GET /api/workspaces/:connectionId/velocity
+  // Returns last 6 months of shipped-item counts per project
+  fastify.get<{ Params: { connectionId: string } }>(
+    '/:connectionId/velocity',
+    { preHandler: [fastify.authenticate] },
+    async (request, reply) => {
+      const userId = (request.user as { id: string }).id;
+      const { connectionId } = request.params;
+
+      const conn = await pool.query(
+        'SELECT id FROM workspace_connections WHERE id = $1 AND owner_user_id = $2',
+        [connectionId, userId]
+      );
+      if (!conn.rows[0]) return reply.status(404).send({ error: 'Not found' });
+
+      const result = await pool.query(
+        `WITH months AS (
+           SELECT generate_series(
+             date_trunc('month', NOW()) - INTERVAL '5 months',
+             date_trunc('month', NOW()),
+             '1 month'::interval
+           ) AS month_start
+         )
+         SELECT
+           pp.id                                    AS project_id,
+           to_char(m.month_start, 'YYYY-MM')       AS month,
+           COALESCE(COUNT(wi.id), 0)::int           AS shipped_count
+         FROM plane_projects pp
+         CROSS JOIN months m
+         LEFT JOIN work_items wi
+           ON wi.plane_project_id = pp.id
+          AND wi.completed_at_plane >= m.month_start
+          AND wi.completed_at_plane <  m.month_start + INTERVAL '1 month'
+         WHERE pp.workspace_connection_id = $1
+         GROUP BY pp.id, m.month_start
+         ORDER BY pp.id, m.month_start ASC`,
+        [connectionId]
+      );
+
+      // Shape: { [projectId]: [ { month, shipped_count } x 6 ] }
+      const byProject: Record<string, Array<{ month: string; shipped_count: number }>> = {};
+      for (const row of result.rows) {
+        if (!byProject[row.project_id]) byProject[row.project_id] = [];
+        byProject[row.project_id]!.push({ month: row.month, shipped_count: row.shipped_count });
+      }
+      return reply.send({ data: byProject });
+    }
+  );
+
+  // ── REPORT ARCHIVE ────────────────────────────────────────────────────────
+
+  // GET /api/workspaces/:connectionId/report-archive
+  fastify.get<{ Params: { connectionId: string } }>(
+    '/:connectionId/report-archive',
+    { preHandler: [fastify.authenticate] },
+    async (request, reply) => {
+      const userId = (request.user as { id: string }).id;
+      const { connectionId } = request.params;
+
+      const conn = await pool.query(
+        'SELECT id FROM workspace_connections WHERE id = $1 AND owner_user_id = $2',
+        [connectionId, userId]
+      );
+      if (!conn.rows[0]) return reply.status(404).send({ error: 'Not found' });
+
+      // Months with saved entries
+      const entriesResult = await pool.query(
+        `SELECT
+           mre.report_month,
+           COUNT(DISTINCT mre.plane_project_id)::int                          AS projects_count,
+           SUM(CASE WHEN LENGTH(TRIM(mre.activities_text)) > 0 THEN 1 ELSE 0 END)::int AS filled_count
+         FROM monthly_report_entries mre
+         JOIN plane_projects pp ON mre.plane_project_id = pp.id
+         WHERE pp.workspace_connection_id = $1
+         GROUP BY mre.report_month
+         ORDER BY mre.report_month DESC`,
+        [connectionId]
+      );
+
+      // Shipped counts per calendar month (from work_items)
+      const shippedResult = await pool.query(
+        `SELECT
+           to_char(date_trunc('month', wi.completed_at_plane), 'YYYY-MM') AS month,
+           COUNT(*)::int AS shipped_count
+         FROM work_items wi
+         JOIN plane_projects pp ON wi.plane_project_id = pp.id
+         WHERE pp.workspace_connection_id = $1
+           AND wi.completed_at_plane IS NOT NULL
+         GROUP BY date_trunc('month', wi.completed_at_plane)
+         ORDER BY month DESC`,
+        [connectionId]
+      );
+
+      const shippedMap: Record<string, number> = {};
+      for (const row of shippedResult.rows) shippedMap[row.month] = row.shipped_count;
+
+      const months = entriesResult.rows.map((r) => ({
+        month: r.report_month as string,
+        projects_count: r.projects_count as number,
+        filled_count: r.filled_count as number,
+        shipped_count: shippedMap[r.report_month] ?? 0,
+      }));
+
+      return reply.send({ data: months });
+    }
+  );
+
+  // ── QUARTERLY REPORT ─────────────────────────────────────────────────────
+
+  // GET /api/workspaces/:connectionId/quarterly-report?quarter=2026-Q2
+  fastify.get<{
+    Params: { connectionId: string };
+    Querystring: { quarter?: string };
+  }>(
+    '/:connectionId/quarterly-report',
+    { preHandler: [fastify.authenticate] },
+    async (request, reply) => {
+      const userId = (request.user as { id: string }).id;
+      const { connectionId } = request.params;
+
+      // Default to current quarter
+      const now = new Date();
+      const defaultQ = `${now.getFullYear()}-Q${Math.ceil((now.getMonth() + 1) / 3)}`;
+      const quarter = request.query.quarter ?? defaultQ;
+
+      const match = quarter.match(/^(\d{4})-Q([1-4])$/);
+      if (!match) return reply.status(400).send({ error: 'quarter must be YYYY-Q[1-4]' });
+
+      const year = Number(match[1]);
+      const q    = Number(match[2]);
+      const firstMonth = (q - 1) * 3 + 1; // 1,4,7,10
+      const months = [firstMonth, firstMonth + 1, firstMonth + 2].map(
+        (m) => `${year}-${String(m).padStart(2, '0')}`
+      );
+      const rangeStart = `${year}-${String(firstMonth).padStart(2, '0')}-01`;
+      const rangeEnd   = `${year}-${String(firstMonth + 3).padStart(2, '0')}-01`; // exclusive
+
+      const conn = await pool.query(
+        'SELECT id FROM workspace_connections WHERE id = $1 AND owner_user_id = $2',
+        [connectionId, userId]
+      );
+      if (!conn.rows[0]) return reply.status(404).send({ error: 'Not found' });
+
+      // Projects
+      const projectsResult = await pool.query(
+        `SELECT id, name, identifier FROM plane_projects
+         WHERE workspace_connection_id = $1 ORDER BY name`,
+        [connectionId]
+      );
+
+      if (projectsResult.rows.length === 0) {
+        return reply.send({ data: { quarter, months, projects: [] } });
+      }
+
+      const projectIds = projectsResult.rows.map((p: { id: string }) => p.id);
+
+      // Shipped counts per project per month in the quarter
+      const shippedResult = await pool.query(
+        `SELECT
+           pp.id AS project_id,
+           to_char(date_trunc('month', wi.completed_at_plane), 'YYYY-MM') AS month,
+           COUNT(*)::int AS shipped_count
+         FROM work_items wi
+         JOIN plane_projects pp ON wi.plane_project_id = pp.id
+         WHERE pp.id = ANY($1::uuid[])
+           AND wi.completed_at_plane >= $2::date
+           AND wi.completed_at_plane <  $3::date
+         GROUP BY pp.id, date_trunc('month', wi.completed_at_plane)`,
+        [projectIds, rangeStart, rangeEnd]
+      );
+
+      // Narrative entries for the 3 months
+      const entriesResult = await pool.query(
+        `SELECT plane_project_id, report_month, goal_text, activities_text, projections_text
+         FROM monthly_report_entries
+         WHERE workspace_connection_id = $1 AND report_month = ANY($2::text[])`,
+        [connectionId, months]
+      );
+
+      // Index shipped and entries
+      type ShippedKey = string; // `${projectId}:${month}`
+      const shippedMap: Record<ShippedKey, number> = {};
+      for (const r of shippedResult.rows) shippedMap[`${r.project_id}:${r.month}`] = r.shipped_count;
+
+      type EntryVal = { goal_text: string; activities_text: string; projections_text: string };
+      const entryMap: Record<ShippedKey, EntryVal> = {};
+      for (const r of entriesResult.rows) {
+        entryMap[`${r.plane_project_id}:${r.report_month}`] = {
+          goal_text: r.goal_text,
+          activities_text: r.activities_text,
+          projections_text: r.projections_text,
+        };
+      }
+
+      const projects = projectsResult.rows.map((p: { id: string; name: string; identifier: string }) => ({
+        id: p.id,
+        name: p.name,
+        identifier: p.identifier,
+        monthData: months.map((m) => ({
+          month: m,
+          shipped_count: shippedMap[`${p.id}:${m}`] ?? 0,
+          entry: entryMap[`${p.id}:${m}`] ?? null,
+        })),
+      }));
+
+      return reply.send({ data: { quarter, months, projects } });
+    }
+  );
+
   // ── MONTHLY REPORT ────────────────────────────────────────────────────────
 
   // GET /api/workspaces/:connectionId/monthly-report?month=YYYY-MM

@@ -30,6 +30,38 @@ export const workspaceService = {
     );
   },
 
+  async getVelocity(connectionId: string) {
+    return apiRequest<Record<string, Array<{ month: string; shipped_count: number }>>>(
+      `/workspaces/${connectionId}/velocity`
+    );
+  },
+
+  async getReportArchive(connectionId: string) {
+    return apiRequest<Array<{
+      month: string;
+      projects_count: number;
+      filled_count: number;
+      shipped_count: number;
+    }>>(`/workspaces/${connectionId}/report-archive`);
+  },
+
+  async getQuarterlyReport(connectionId: string, quarter: string) {
+    return apiRequest<{
+      quarter: string;
+      months: string[];
+      projects: Array<{
+        id: string;
+        name: string;
+        identifier: string;
+        monthData: Array<{
+          month: string;
+          shipped_count: number;
+          entry: { goal_text: string; activities_text: string; projections_text: string } | null;
+        }>;
+      }>;
+    }>(`/workspaces/${connectionId}/quarterly-report?quarter=${quarter}`);
+  },
+
   async getMonthlyReport(connectionId: string, month: string) {
     return apiRequest<{
       month: string;

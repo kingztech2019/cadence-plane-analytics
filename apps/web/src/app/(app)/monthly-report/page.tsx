@@ -50,6 +50,37 @@ function stateColor(group: StateGroup): string {
   return group.state_color ?? FLOW_COLOR[group.flow_category] ?? '#94a3b8';
 }
 
+// ─── sparkline ────────────────────────────────────────────────────────────────
+
+function Sparkline({ data, months }: { data: Array<{ month: string; shipped_count: number }>; months?: string[] }) {
+  if (data.length < 2) return null;
+  const counts = data.map((d) => d.shipped_count);
+  const max = Math.max(...counts, 1);
+  const W = 120; const H = 30;
+  const step = W / (counts.length - 1);
+  const pts  = counts.map((v, i) => `${(i * step).toFixed(1)},${(H - (v / max) * H).toFixed(1)}`).join(' ');
+  const last = counts[counts.length - 1] ?? 0;
+  const prev = counts[counts.length - 2] ?? 0;
+  const trend = last > prev ? '#22c55e' : last < prev ? '#ef4444' : '#94a3b8';
+  const monthAbbr = (m: string) => new Date(`${m}-15`).toLocaleDateString('en-US', { month: 'short' });
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10 }}>
+      <svg width={W} height={H + 14} overflow="visible">
+        <polyline points={pts} fill="none" stroke={trend} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" opacity={0.7} />
+        {counts.map((v, i) => (
+          <circle key={i} cx={(i * step).toFixed(1)} cy={(H - (v / max) * H).toFixed(1)} r={2.5} fill={trend} opacity={i === counts.length - 1 ? 1 : 0.5} />
+        ))}
+        {/* Month labels: first and last */}
+        <text x={0} y={H + 12} fontSize={9} fill="var(--fg-subtle)" textAnchor="middle">{monthAbbr(data[0]!.month)}</text>
+        <text x={W} y={H + 12} fontSize={9} fill="var(--fg-subtle)" textAnchor="middle">{monthAbbr(data[data.length - 1]!.month)}</text>
+      </svg>
+      <span style={{ fontSize: 11, color: trend, fontWeight: 700, paddingBottom: 12 }}>
+        {last > prev ? '↑' : last < prev ? '↓' : '→'} {last}
+      </span>
+    </div>
+  );
+}
+
 // ─── sub-components ───────────────────────────────────────────────────────────
 
 function StatPill({ label, value, color }: { label: string; value: number; color: string }) {
@@ -138,6 +169,7 @@ export default function MonthlyReportPage() {
   const [loaded,       setLoaded]       = useState(false);
   const [draftingFor,             setDraftingFor]             = useState<string | null>(null);
   const [draftingProjectionsFor,  setDraftingProjectionsFor]  = useState<string | null>(null);
+  const [velocity,                setVelocity]                = useState<Record<string, Array<{ month: string; shipped_count: number }>>>({});
   const [savedFor,     setSavedFor]     = useState<Record<string, boolean>>({});
   const saveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
@@ -152,7 +184,11 @@ export default function MonthlyReportPage() {
     setLoading(true);
     setLoaded(false);
     try {
-      const data = await workspaceService.getMonthlyReport(cid, m);
+      const [data, vel] = await Promise.all([
+        workspaceService.getMonthlyReport(cid, m),
+        workspaceService.getVelocity(cid),
+      ]);
+      setVelocity(vel);
       setProjects(data.projects);
       const map: Record<string, EntryDraft> = {};
       for (const p of data.projects) {
@@ -443,7 +479,8 @@ export default function MonthlyReportPage() {
                 display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
                 marginBottom: 16,
               }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                {/* Left: identity + sparkline */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                   <div style={{
                     width: 32, height: 32, borderRadius: 9,
                     background: 'var(--accent-dim, rgba(99,102,241,0.1))',
@@ -462,6 +499,11 @@ export default function MonthlyReportPage() {
                       {project.identifier}
                     </p>
                   </div>
+                  {velocity[project.id] && velocity[project.id]!.some(d => d.shipped_count > 0) && (
+                    <div style={{ marginLeft: 8 }}>
+                      <Sparkline data={velocity[project.id]!} />
+                    </div>
+                  )}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                   {project.itemsByState.slice(0, 4).map((g) => (
