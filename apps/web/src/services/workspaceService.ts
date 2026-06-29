@@ -127,6 +127,12 @@ export const workspaceService = {
       state_color: string | null;
       flow_category: string;
       days_in_current_state: number;
+      current_state_entered_at: string | null;
+      last_transition_at: string | null;
+      last_transition_from: string | null;
+      last_transition_to: string | null;
+      last_transition_from_category: string | null;
+      labels: Array<{ name: string; color: string | null }>;
       assignee_name: string | null;
       project_identifier: string;
       project_id: string;

@@ -204,7 +204,16 @@ const workspacesRoutes: FastifyPluginAsync = async (fastify) => {
            COALESCE(
              ROUND(EXTRACT(EPOCH FROM (NOW() - tis_cur.entered_at)) / 86400)::int,
              ROUND(EXTRACT(EPOCH FROM (NOW() - wi.updated_at_plane)) / 86400)::int
-           ) AS days_in_current_state
+           ) AS days_in_current_state,
+           -- When item entered its current state (used on frontend to compute "shipped this period")
+           tis_cur.entered_at AS current_state_entered_at,
+           -- Last recorded state transition: date + from/to state names + from flow_category
+           last_st.transitioned_at       AS last_transition_at,
+           last_st.from_state_name       AS last_transition_from,
+           last_st.to_state_name         AS last_transition_to,
+           last_st.from_flow_category    AS last_transition_from_category,
+           -- Labels for this item (name + color)
+           COALESCE(lbl.labels, '[]'::json) AS labels
          FROM work_items wi
          JOIN plane_states ps      ON wi.plane_state_id  = ps.id
          JOIN plane_projects pp    ON wi.plane_project_id = pp.id
@@ -219,10 +228,57 @@ const workspacesRoutes: FastifyPluginAsync = async (fastify) => {
            ORDER BY entered_at DESC
            LIMIT 1
          ) tis_cur ON true
+         -- Most recent state transition (to show what drove the "Updated" date)
+         LEFT JOIN LATERAL (
+           SELECT st.transitioned_at,
+                  ps_from.name          AS from_state_name,
+                  ps_to.name            AS to_state_name,
+                  ps_from.flow_category AS from_flow_category
+           FROM state_transitions st
+           JOIN plane_states ps_to   ON ps_to.id  = st.to_state_id
+           LEFT JOIN plane_states ps_from ON ps_from.id = st.from_state_id
+           WHERE st.work_item_id = wi.id
+           ORDER BY st.transitioned_at DESC
+           LIMIT 1
+         ) last_st ON true
+         -- Labels: resolve plane_label_id TEXT[] → name + color
+         LEFT JOIN LATERAL (
+           SELECT json_agg(json_build_object('name', pl.name, 'color', pl.color) ORDER BY pl.name) AS labels
+           FROM unnest(wi.label_ids) AS lid
+           JOIN plane_labels pl ON pl.plane_label_id = lid
+                                AND pl.workspace_connection_id = pp.workspace_connection_id
+         ) lbl ON true
          WHERE pp.workspace_connection_id = $1
-           AND wi.updated_at_plane >= $2::date
-           AND wi.updated_at_plane <  ($3::date + INTERVAL '1 day')
            ${projectClause}
+           AND (
+             -- Active (non-done) states: overlapping with the date range
+             EXISTS (
+               SELECT 1 FROM time_in_state tis2
+               JOIN plane_states ps2 ON ps2.id = tis2.state_id
+               WHERE tis2.work_item_id = wi.id
+                 AND ps2.flow_category NOT IN ('backlog', 'cancelled', 'done')
+                 AND tis2.entered_at < ($3::date + INTERVAL '1 day')
+                 AND (tis2.exited_at IS NULL OR tis2.exited_at >= $2::date)
+             )
+             OR (
+               -- Done states: completed during the exact selected period only
+               EXISTS (
+                 SELECT 1 FROM time_in_state tis2
+                 JOIN plane_states ps2 ON ps2.id = tis2.state_id
+                 WHERE tis2.work_item_id = wi.id
+                   AND ps2.flow_category = 'done'
+                   AND tis2.entered_at >= $2::date
+                   AND tis2.entered_at < ($3::date + INTERVAL '1 day')
+               )
+             )
+             OR (
+               -- Fallback for items with no transition history: use updated_at_plane
+               NOT EXISTS (SELECT 1 FROM time_in_state tis3 WHERE tis3.work_item_id = wi.id)
+               AND ps.flow_category NOT IN ('backlog', 'cancelled', 'done')
+               AND wi.updated_at_plane >= $2::date
+               AND wi.updated_at_plane < ($3::date + INTERVAL '1 day')
+             )
+           )
          ORDER BY ps.sequence_order ASC, wi.updated_at_plane DESC`,
         params
       );
@@ -320,8 +376,25 @@ const workspacesRoutes: FastifyPluginAsync = async (fastify) => {
          ) tis_cur ON true
          WHERE pp.workspace_connection_id = $1
            AND pp.id = $2
-           AND wi.updated_at_plane >= $3::date
-           AND wi.updated_at_plane <  ($4::date + INTERVAL '1 day')`,
+           AND (
+             EXISTS (
+               SELECT 1 FROM time_in_state tis2
+               JOIN plane_states ps2 ON ps2.id = tis2.state_id
+               WHERE tis2.work_item_id = wi.id
+                 AND ps2.flow_category NOT IN ('backlog', 'cancelled')
+                 AND tis2.entered_at < ($4::date + INTERVAL '1 day')
+                 AND (
+                   (ps2.flow_category NOT IN ('done', 'backlog', 'cancelled') AND (tis2.exited_at IS NULL OR tis2.exited_at >= $3::date))
+                   OR (ps2.flow_category = 'done' AND tis2.entered_at >= $3::date AND tis2.entered_at < ($4::date + INTERVAL '1 day'))
+                 )
+             )
+             OR (
+               NOT EXISTS (SELECT 1 FROM time_in_state tis3 WHERE tis3.work_item_id = wi.id)
+               AND ps.flow_category NOT IN ('backlog', 'cancelled', 'done')
+               AND wi.updated_at_plane >= $3::date
+               AND wi.updated_at_plane < ($4::date + INTERVAL '1 day')
+             )
+           )`,
         [connectionId, projectId, fromDate, toDate]
       );
 

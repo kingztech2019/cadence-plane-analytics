@@ -17,6 +17,12 @@ type ReportItem = {
   state_color: string | null;
   flow_category: string;
   days_in_current_state: number;
+  current_state_entered_at: string | null;
+  last_transition_at: string | null;
+  last_transition_from: string | null;
+  last_transition_to: string | null;
+  last_transition_from_category: string | null;
+  labels: Array<{ name: string; color: string | null }>;
   assignee_name: string | null;
   project_identifier: string;
   project_id: string;
@@ -209,8 +215,25 @@ export default function ReportPage() {
 
   const staleItems    = items.filter(isStale);
   const stalePrev     = prevItems.filter(isStale);
-  const shippedNow    = items.filter(i => i.flow_category === 'done').length;
-  const shippedPrev   = prevItems.filter(i => i.flow_category === 'done').length;
+  // "Shipped this period" = done items that entered done state within the selected date range
+  // An item is "shipped" if it entered its current state during the period AND that state
+  // represents completed development: either a done state, or an in_progress state reached
+  // by advancing FROM another in_progress state (e.g. In Progress → QA/Staging).
+  function isShippedInPeriod(item: ReportItem, periodFrom: string, periodTo: string): boolean {
+    if (!item.current_state_entered_at) return false;
+    const enteredAt = new Date(item.current_state_entered_at);
+    const start = new Date(periodFrom);
+    const end = new Date(periodTo);
+    end.setDate(end.getDate() + 1);
+    if (enteredAt < start || enteredAt >= end) return false;
+    if (item.flow_category === 'done') return true;
+    // in_progress → in_progress advancement (e.g. In Progress → QA/Staging)
+    if (item.flow_category === 'in_progress' && item.last_transition_from_category === 'in_progress') return true;
+    return false;
+  }
+  const prevPeriod  = getPrevPeriod(from, to);
+  const shippedNow  = items.filter(i => isShippedInPeriod(i, from, to)).length;
+  const shippedPrev = prevItems.filter(i => isShippedInPeriod(i, prevPeriod.from, prevPeriod.to)).length;
   const urgentNow     = items.filter(i => ['urgent','highest'].includes(i.priority?.toLowerCase() ?? '')).length;
   const highNow       = items.filter(i => i.priority?.toLowerCase() === 'high').length;
 
@@ -703,7 +726,8 @@ export default function ReportPage() {
                   <thead>
                     <tr style={{ background: 'var(--surface-2)' }}>
                       <th style={thStyle}>Issue</th>
-                      <th style={{ ...thStyle, width: '40%' }}>Summary</th>
+                      <th style={{ ...thStyle, minWidth: 200 }}>Summary</th>
+                      <th style={thStyle}>Labels</th>
                       {showProjectCol && <th style={thStyle}>Project</th>}
                       <th style={thStyle}>Assignee</th>
                       <th style={thStyle}>Priority</th>
@@ -752,10 +776,35 @@ export default function ReportPage() {
                             </div>
                           </td>
 
-                          <td style={{ ...tdStyle, maxWidth: 0 }}>
-                            <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--fg)' }}>
+                          <td style={{ ...tdStyle }}>
+                            <span style={{ color: 'var(--fg)', wordBreak: 'break-word' }}>
                               {item.title}
                             </span>
+                          </td>
+
+                          <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
+                            {item.labels?.length > 0 ? (
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                                {item.labels.map((lbl) => {
+                                  const bg = lbl.color ? `${lbl.color}22` : 'rgba(99,102,241,0.12)';
+                                  const fg = lbl.color ?? '#6366f1';
+                                  return (
+                                    <span key={lbl.name} style={{
+                                      display: 'inline-block',
+                                      fontSize: 10, fontWeight: 600,
+                                      padding: '2px 8px', borderRadius: 20,
+                                      background: bg, color: fg,
+                                      border: `1px solid ${fg}44`,
+                                      whiteSpace: 'nowrap',
+                                    }}>
+                                      {lbl.name}
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            ) : (
+                              <span style={{ color: 'var(--fg-subtle)', fontSize: 11 }}>—</span>
+                            )}
                           </td>
 
                           {showProjectCol && (
@@ -784,7 +833,41 @@ export default function ReportPage() {
                             {fmtDate(item.created_at_plane)}
                           </td>
                           <td style={{ ...tdStyle, whiteSpace: 'nowrap', color: 'var(--fg-muted)' }}>
-                            {fmtDate(item.updated_at_plane)}
+                            {(() => {
+                              const hasTransition = !!item.last_transition_at;
+                              const transitionDate = hasTransition ? new Date(item.last_transition_at!) : null;
+                              const updatedDate    = new Date(item.updated_at_plane);
+                              const sameDay = transitionDate
+                                && Math.abs(transitionDate.getTime() - updatedDate.getTime()) < 86_400_000;
+
+                              if (sameDay) {
+                                // State change — show inline
+                                return (
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                    <span>{fmtDate(item.updated_at_plane)}</span>
+                                    <span style={{
+                                      fontSize: 10, fontWeight: 600,
+                                      color: 'var(--accent-light)',
+                                      display: 'flex', alignItems: 'center', gap: 3,
+                                    }}>
+                                      {item.last_transition_from ?? '—'}
+                                      <span style={{ opacity: 0.6 }}>→</span>
+                                      {item.last_transition_to}
+                                    </span>
+                                  </div>
+                                );
+                              }
+
+                              // Not a state change — date + tooltip hint
+                              const tip = hasTransition
+                                ? `Last state change: ${item.last_transition_from ?? '—'} → ${item.last_transition_to} on ${fmtDate(item.last_transition_at!)}\nThis update was a comment, description or field edit`
+                                : 'No state change recorded — likely a comment, description, assignee or priority update';
+                              return (
+                                <span title={tip} style={{ cursor: 'help', borderBottom: '1px dashed var(--border)' }}>
+                                  {fmtDate(item.updated_at_plane)}
+                                </span>
+                              );
+                            })()}
                           </td>
                         </tr>
                       );

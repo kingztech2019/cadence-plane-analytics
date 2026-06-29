@@ -95,6 +95,20 @@ export const syncService = {
           );
         }
 
+        // Labels
+        try {
+          const labels = await client.listLabels(workspaceSlug, p.id);
+          for (const l of labels.results) {
+            await pool.query(
+              `INSERT INTO plane_labels (workspace_connection_id, plane_project_id, plane_label_id, name, color)
+               VALUES ($1, $2, $3, $4, $5)
+               ON CONFLICT (workspace_connection_id, plane_label_id)
+               DO UPDATE SET name = $4, color = $5`,
+              [connectionId, internalProjectId, l.id, l.name, l.color ?? null]
+            );
+          }
+        } catch { /* non-fatal: skip if labels endpoint unavailable */ }
+
         // Cycles
         const cycles = await client.listCycles(workspaceSlug, p.id);
         for (const c of cycles.results) {

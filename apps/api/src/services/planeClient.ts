@@ -137,6 +137,13 @@ export class PlaneClient {
     );
   }
 
+  async listLabels(
+    workspaceSlug: string,
+    projectId: string
+  ): Promise<PlanePaginatedResponse<{ id: string; name: string; color: string }>> {
+    return this.fetch(`workspaces/${workspaceSlug}/projects/${projectId}/labels/`);
+  }
+
   async listActivities(
     workspaceSlug: string,
     projectId: string,
